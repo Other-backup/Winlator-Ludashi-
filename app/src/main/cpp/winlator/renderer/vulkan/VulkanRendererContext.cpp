@@ -56,6 +56,7 @@ VulkanRendererContext::~VulkanRendererContext() {
 
     for (auto& retired : deleteQueue) destroyTexNow(retired);
     deleteQueue.clear();
+    wfgDestroy();
     cleanupSwapchain(); cleanupCursorTex();
 
     vk_.DestroySampler(device, sampler, nullptr);
@@ -402,15 +403,21 @@ void VulkanRendererContext::createSwapchain() {
     uint32_t fmtN=0; vk_.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice,surface,&fmtN,nullptr);
     std::vector<VkSurfaceFormatKHR> fmts(fmtN); vk_.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice,surface,&fmtN,fmts.data());
     swapchainFmt = VK_FORMAT_R8G8B8A8_UNORM;
-    uint32_t imgCount=caps.minImageCount+1;
+    // WFG presents its generated frames from extra images, FIFO-paced, and writes them by transfer.
+    const bool wantWfg = wfgRequested.load();
+    uint32_t imgCount=caps.minImageCount+1+(wantWfg?VKR_DIS_MAX_GENERATIONS:0u);
     if (caps.maxImageCount>0&&imgCount>caps.maxImageCount) imgCount=caps.maxImageCount;
+    swapchainMinImages = caps.minImageCount;
+    wfgSwapchain = wantWfg;
+    swapchainTransferDst = wantWfg && (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
     uint32_t pmCount=0;
     vk_.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice,surface,&pmCount,nullptr);
     availablePresentModes.resize(pmCount);
     vk_.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice,surface,&pmCount,availablePresentModes.data());
     VkPresentModeKHR presentMode=VK_PRESENT_MODE_FIFO_KHR;
-    for (auto pm:availablePresentModes) if(pm==requestedPresentMode){presentMode=pm;break;}
+    if (!wantWfg)
+        for (auto pm:availablePresentModes) if(pm==requestedPresentMode){presentMode=pm;break;}
     if(verboseLog){
         std::string pmList;
         for(auto pm:availablePresentModes) pmList+=std::to_string((int)pm)+" ";
@@ -429,6 +436,7 @@ void VulkanRendererContext::createSwapchain() {
     ci.surface=surface; ci.minImageCount=imgCount; ci.imageFormat=swapchainFmt;
     ci.imageColorSpace=VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; ci.imageExtent=swapchainExt;
     ci.imageArrayLayers=1; ci.imageUsage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (swapchainTransferDst) ci.imageUsage|=VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     ci.imageSharingMode=VK_SHARING_MODE_EXCLUSIVE; ci.preTransform=pre;
     ci.compositeAlpha=compositeAlpha; ci.presentMode=presentMode; ci.clipped=VK_TRUE;
     ci.oldSwapchain=oldSwapchain;
@@ -1208,6 +1216,7 @@ void VulkanRendererContext::renderFrame() {
             if (vk_.CreateSemaphore(device,&semInfo,nullptr,&sem)!=VK_SUCCESS)
                 throw std::runtime_error("recreate acquire semaphore");
         }
+        wfgDestroySems(); // wfgSync recreates them
         bool ok=false;
         try{createSwapchain();createFramebuffers();createCmdBufs();imgInFlight.assign(swapchainImages.size(),VK_NULL_HANDLE);ok=true;}
         catch(const std::exception& e){
@@ -1225,6 +1234,11 @@ void VulkanRendererContext::renderFrame() {
     if (swapchain==VK_NULL_HANDLE || cmdBufs.empty()) {
         fbResized.store(true);
         swapchainRetryPending.store(true);
+        return;
+    }
+    if (!wfgSync()) {
+        // WFG was switched: rebuild the swapchain for it first.
+        fbResized.store(true);
         return;
     }
     if (currentFrame >= cmdBufs.size() || cmdBufs[currentFrame] == VK_NULL_HANDLE) {
@@ -1346,18 +1360,36 @@ void VulkanRendererContext::renderFrame() {
         curW=cursorTexW; curH=cursorTexH;
     }
 
-    recordCmdBuf(cmdBufs[currentFrame],imgIdx,frameDraws,
-        frameAhbTransitions,framePreUpload,framePostUpload,
-        curUpload,hasCurUpload,
-        ox,oy,sx,sy,cw,ch,ptrX,ptrY,curHotX,curHotY,curW,curH,curVis,
-        effectiveScissor);
+    WfgFrame wf = wfgBeginFrame(frameDraws,ox,oy,sx,sy,cw,ch);
+    {
+        struct RecordTargetReset {
+            VulkanRendererContext* c;
+            ~RecordTargetReset() { c->recordPass=VK_NULL_HANDLE; c->recordFB=VK_NULL_HANDLE; c->recordLeaveOpen=false; }
+        } recordTargetReset{this};
+        if (wf.active) { recordPass=wfgPass; recordFB=wfgCompositeFB; recordLeaveOpen=true; }
+        recordCmdBuf(cmdBufs[currentFrame],imgIdx,frameDraws,
+            frameAhbTransitions,framePreUpload,framePostUpload,
+            curUpload,hasCurUpload,
+            ox,oy,sx,sy,cw,ch,ptrX,ptrY,curHotX,curHotY,curW,curH,curVis,
+            effectiveScissor);
+    }
+    if (wf.active) wfgRecord(cmdBufs[currentFrame],imgIdx,wf);
 
-    VkSemaphore wSem[]={imgAvailSems[currentFrame]}, sSem[]={renderDoneSems[imgIdx]};
-    VkPipelineStageFlags wStage[]={VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    // The real image, then each generated one: wait for its acquire, signal its present.
+    VkSemaphore wSem[1+VKR_DIS_MAX_GENERATIONS], sSem[1+VKR_DIS_MAX_GENERATIONS];
+    VkPipelineStageFlags wStage[1+VKR_DIS_MAX_GENERATIONS];
+    wSem[0]=imgAvailSems[currentFrame]; sSem[0]=renderDoneSems[imgIdx];
+    wStage[0]=wf.active ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT
+                        : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    for (uint32_t g=0; g<wf.genCount; g++) {
+        wSem[1+g]=wfgGenSems[currentFrame][g];
+        sSem[1+g]=renderDoneSems[wf.genIdx[g]];
+        wStage[1+g]=VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
     VkSubmitInfo si{}; si.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.waitSemaphoreCount=1; si.pWaitSemaphores=wSem; si.pWaitDstStageMask=wStage;
+    si.waitSemaphoreCount=1+wf.genCount; si.pWaitSemaphores=wSem; si.pWaitDstStageMask=wStage;
     si.commandBufferCount=1; si.pCommandBuffers=&cmdBufs[currentFrame];
-    si.signalSemaphoreCount=1; si.pSignalSemaphores=sSem;
+    si.signalSemaphoreCount=1+wf.genCount; si.pSignalSemaphores=sSem;
 
     vk_.ResetFences(device,1,&inFlightFences[currentFrame]);
     if (vk_.QueueSubmit(graphicsQueue,1,&si,inFlightFences[currentFrame])!=VK_SUCCESS) {
@@ -1388,6 +1420,14 @@ void VulkanRendererContext::renderFrame() {
         }
     }
     VkSwapchainKHR scs[]={swapchain};
+    // Generated frames sit between the previous real frame and this one.
+    for (uint32_t g=0; g<wf.genCount; g++) {
+        VkPresentInfoKHR gpi{}; gpi.sType=VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        gpi.waitSemaphoreCount=1; gpi.pWaitSemaphores=&sSem[1+g];
+        gpi.swapchainCount=1; gpi.pSwapchains=scs; gpi.pImageIndices=&wf.genIdx[g];
+        VkResult gr=vk_.QueuePresentKHR(graphicsQueue,&gpi);
+        if (gr==VK_ERROR_OUT_OF_DATE_KHR||gr==VK_ERROR_SURFACE_LOST_KHR) fbResized.store(true);
+    }
     VkPresentInfoKHR pi{}; pi.sType=VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount=1; pi.pWaitSemaphores=sSem; pi.swapchainCount=1; pi.pSwapchains=scs; pi.pImageIndices=&imgIdx;
 
@@ -1503,6 +1543,7 @@ void VulkanRendererContext::updateWindowContent(int64_t id, void* px, short w, s
         auto it=texMap.find(id);
         if (it!=texMap.end()) it->second.dirty=true;
     }
+    contentFrames.fetch_add(1,std::memory_order_relaxed);
     needsRender.store(true); dirtyCV.notify_one();
 }
 
@@ -1529,6 +1570,7 @@ void VulkanRendererContext::updateWindowContentAHB(int64_t id, AHardwareBuffer* 
     wt.img  = src.img; wt.mem  = src.mem; wt.view = src.view; wt.ds   = src.ds;
     wt.isAHB = true; wt.ahb  = ahb; wt.w = src.w; wt.h = src.h;
     wt.needsTransition = false; // The first-use layout belongs to the cached VkImage.
+    contentFrames.fetch_add(1,std::memory_order_relaxed);
     needsRender.store(true); dirtyCV.notify_one();
 }
 

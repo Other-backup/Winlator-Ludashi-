@@ -664,6 +664,81 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:text="Frame Generation"
+                    android:textColor="#FFFFFF"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
+                <LinearLayout
+                    android:id="@+id/LLWfgOptions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:orientation="vertical"
+                    android:background="@drawable/sidebar_card"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="12dp">
+                    <Switch
+                        android:id="@+id/SWWfgEnabled"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:text="WFG Frame Generator"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp" />
+                    <LinearLayout
+                        android:id="@+id/LLWfgQualityRow"
+                        android:layout_width="match_parent"
+                        android:layout_height="42dp"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Motion Quality"
+                            android:textColor="#0055ff"
+                            android:textSize="13sp" />
+                        <Spinner
+                            android:id="@+id/SPWfgQuality"
+                            android:layout_width="130dp"
+                            android:layout_height="36dp"
+                            android:background="@drawable/sidebar_spinner" />
+                    </LinearLayout>
+                    <LinearLayout
+                        android:id="@+id/LLWfgTargetRow"
+                        android:layout_width="match_parent"
+                        android:layout_height="42dp"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Target FPS"
+                            android:textColor="#0055ff"
+                            android:textSize="13sp" />
+                        <Spinner
+                            android:id="@+id/SPWfgTarget"
+                            android:layout_width="130dp"
+                            android:layout_height="36dp"
+                            android:background="@drawable/sidebar_spinner" />
+                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/TVWfgNote"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Interpolates frames between the game's own with optical flow. Smoother motion, one extra frame of input latency."
+                        android:textColor="#99FFFFFF"
+                        android:textSize="11sp" />
+                </LinearLayout>
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="22dp"
                     android:text="HUD"
                     android:textColor="#FFFFFF"
                     android:textSize="24sp"

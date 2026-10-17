@@ -1369,6 +1369,7 @@ public class XServerDisplayActivity extends AppCompatActivity {
 
         setupSidebarHudControls();
         setupSidebarGraphicsControls();
+        setupSidebarWfgControls();
     }
 
     private ActivityResultLauncher<Intent> controlsEditorActivityResultLauncher = registerForActivityResult(
@@ -1679,6 +1680,87 @@ public class XServerDisplayActivity extends AppCompatActivity {
                 return view;
             }
         };
+    }
+
+    /** WFG (WinNative/Winlator Frame Generator) in the FPS panel; it runs in the Vulkan renderer. */
+    private void setupSidebarWfgControls() {
+        Switch   swWfg     = findViewById(R.id.SWWfgEnabled);
+        Spinner  spQuality = findViewById(R.id.SPWfgQuality);
+        Spinner  spTarget  = findViewById(R.id.SPWfgTarget);
+        View     qualityRow = findViewById(R.id.LLWfgQualityRow);
+        View     targetRow  = findViewById(R.id.LLWfgTargetRow);
+        TextView tvNote    = findViewById(R.id.TVWfgNote);
+        if (swWfg == null || spQuality == null || spTarget == null) return;
+
+        // Motion is analysed at this many pixels on the shorter side of the frame.
+        final int[]    flowSides     = {128, 180, 252};
+        final String[] qualityLabels = {"Fast", "Balanced", "Quality"};
+        final int[]    targets       = {0, 60, 90, 120, 144};
+        final String[] targetLabels  = {"Max refresh", "60 FPS", "90 FPS", "120 FPS", "144 FPS"};
+
+        ArrayAdapter<String> qa = createSidebarSpinnerAdapter(qualityLabels);
+        qa.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spQuality.setAdapter(qa);
+        ArrayAdapter<String> ta = createSidebarSpinnerAdapter(targetLabels);
+        ta.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spTarget.setAdapter(ta);
+
+        final VulkanXServerView vk = xServerView instanceof VulkanXServerView
+                ? (VulkanXServerView) xServerView : null;
+        if (vk == null) {
+            swWfg.setChecked(false);
+            swWfg.setEnabled(false);
+            if (qualityRow != null) qualityRow.setVisibility(View.GONE);
+            if (targetRow != null) targetRow.setVisibility(View.GONE);
+            if (tvNote != null)
+                tvNote.setText("WFG runs in the Vulkan renderer. Turn off the native (EGL/DisplayX) renderer for this container to use it.");
+            return;
+        }
+
+        int quality = parseExtra("wfgQuality", 1);
+        int target  = parseExtra("wfgTarget", 0);
+        if (quality < 0 || quality >= flowSides.length) quality = 1;
+        if (target < 0 || target >= targets.length) target = 0;
+        boolean enabled = parseExtra("wfgEnabled", 0) == 1;
+
+        swWfg.setChecked(enabled);
+        spQuality.setSelection(quality, false);
+        spTarget.setSelection(target, false);
+        if (qualityRow != null) qualityRow.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        if (targetRow != null) targetRow.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        vk.setWfg(enabled, flowSides[quality], targets[target]);
+
+        Runnable apply = () -> {
+            int q = Math.max(0, Math.min(flowSides.length - 1, spQuality.getSelectedItemPosition()));
+            int t = Math.max(0, Math.min(targets.length - 1, spTarget.getSelectedItemPosition()));
+            boolean on = swWfg.isChecked();
+            vk.setWfg(on, flowSides[q], targets[t]);
+            if (qualityRow != null) qualityRow.setVisibility(on ? View.VISIBLE : View.GONE);
+            if (targetRow != null) targetRow.setVisibility(on ? View.VISIBLE : View.GONE);
+            if (container != null) {
+                container.putExtra("wfgEnabled", on ? "1" : "0");
+                container.putExtra("wfgQuality", String.valueOf(q));
+                container.putExtra("wfgTarget", String.valueOf(t));
+                container.saveData();
+            }
+        };
+        swWfg.setOnCheckedChangeListener((b, checked) -> apply.run());
+        AdapterView.OnItemSelectedListener onSelect = new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) { apply.run(); }
+            @Override public void onNothingSelected(AdapterView<?> p) {}
+        };
+        spQuality.setOnItemSelectedListener(onSelect);
+        spTarget.setOnItemSelectedListener(onSelect);
+    }
+
+    private int parseExtra(String key, int fallback) {
+        if (container == null) return fallback;
+        try {
+            String value = container.getExtra(key);
+            return value == null || value.isEmpty() ? fallback : Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void setupSidebarHudControls() {

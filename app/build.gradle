@@ -144,7 +144,8 @@ android {
         }
     }
 
-    ndkVersion '29.0.14206865'
+    // -PwinlatorNdkVersion=<version> builds with another installed NDK.
+    ndkVersion project.findProperty('winlatorNdkVersion') ?: '29.0.14206865'
 
     externalNativeBuild {
         cmake {

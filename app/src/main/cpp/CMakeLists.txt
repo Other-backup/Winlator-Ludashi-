@@ -36,6 +36,12 @@ add_library(winlator SHARED
 
 target_compile_options(winlator PRIVATE -Wall -Wextra)
 target_include_directories(winlator PRIVATE winlator/renderer winlator/renderer/effectcomposer)
+# DisplayX resolves the API 29+ ASurfaceTransaction calls with dlsym; NDKs before r29 still mark
+# even their callback typedefs unavailable below minSdk.
+if(ANDROID_NDK_MAJOR AND ANDROID_NDK_MAJOR LESS 29)
+    set_source_files_properties(winlator/renderer/displayx.cpp PROPERTIES
+            COMPILE_DEFINITIONS __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
+endif()
 
 target_link_libraries(winlator
         log
@@ -67,68 +73,56 @@ target_link_libraries(fakeinput
 # presentation path used by DisplayX or EGL.
 set(VULKAN_RENDERER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/winlator/renderer/vulkan)
 
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_vert.h
-    COMMAND glslangValidator -V --vn window_vert_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_vert.h
-            ${VULKAN_RENDERER_DIR}/window.vert
-    DEPENDS ${VULKAN_RENDERER_DIR}/window.vert
-    COMMENT "Compiling window.vert -> window_vert.h"
-)
+# glslc ships with the NDK; glslangValidator is used instead when it is on PATH.
+if(CMAKE_HOST_WIN32)
+    set(GLSLC_HOST_TAG "windows-x86_64")
+    set(GLSLC_EXE_NAME "glslc.exe")
+elseif(CMAKE_HOST_APPLE)
+    set(GLSLC_HOST_TAG "darwin-x86_64")
+    set(GLSLC_EXE_NAME "glslc")
+else()
+    set(GLSLC_HOST_TAG "linux-x86_64")
+    set(GLSLC_EXE_NAME "glslc")
+endif()
+set(GLSLC "${ANDROID_NDK}/shader-tools/${GLSLC_HOST_TAG}/${GLSLC_EXE_NAME}")
+if(NOT EXISTS "${GLSLC}")
+    message(FATAL_ERROR "glslc not found at ${GLSLC}; check the NDK installation")
+endif()
+find_program(GLSLANG_VALIDATOR glslangValidator)
+set(SPIRV_BIN2C_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/wfg/bin2c.cmake)
 
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_frag.h
-    COMMAND glslangValidator -V --vn window_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_frag.h
-            ${VULKAN_RENDERER_DIR}/window.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window.frag
-    COMMENT "Compiling window.frag -> window_frag.h"
-)
+function(window_shader_header source var)
+    set(output ${CMAKE_CURRENT_BINARY_DIR}/${var}.h)
+    if(GLSLANG_VALIDATOR)
+        add_custom_command(
+            OUTPUT ${output}
+            COMMAND ${GLSLANG_VALIDATOR} -V --vn ${var}_code -x -o ${output}
+                    ${VULKAN_RENDERER_DIR}/${source}
+            DEPENDS ${VULKAN_RENDERER_DIR}/${source}
+            COMMENT "Compiling ${source} -> ${var}.h"
+        )
+    else()
+        add_custom_command(
+            OUTPUT ${output}
+            COMMAND ${GLSLC} -o ${output}.spv ${VULKAN_RENDERER_DIR}/${source}
+            COMMAND ${CMAKE_COMMAND} -DINPUT_FILE=${output}.spv -DOUTPUT_FILE=${output}
+                    -DVAR_NAME=${var}_code -P ${SPIRV_BIN2C_SCRIPT}
+            DEPENDS ${VULKAN_RENDERER_DIR}/${source} ${SPIRV_BIN2C_SCRIPT}
+            COMMENT "Compiling ${source} -> ${var}.h"
+            VERBATIM
+        )
+    endif()
+endfunction()
 
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_sgsr_frag.h
-    COMMAND glslangValidator -V --vn window_sgsr_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_sgsr_frag.h
-            ${VULKAN_RENDERER_DIR}/window_sgsr.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window_sgsr.frag
-    COMMENT "Compiling window_sgsr.frag -> window_sgsr_frag.h"
-)
+window_shader_header(window.vert         window_vert)
+window_shader_header(window.frag         window_frag)
+window_shader_header(window_sgsr.frag    window_sgsr_frag)
+window_shader_header(window_fsr1.frag    window_fsr1_frag)
+window_shader_header(window_lanczos.frag window_lanczos_frag)
+window_shader_header(window_stretch.frag window_stretch_frag)
+window_shader_header(window_postfx.frag  window_postfx_frag)
 
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_fsr1_frag.h
-    COMMAND glslangValidator -V --vn window_fsr1_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_fsr1_frag.h
-            ${VULKAN_RENDERER_DIR}/window_fsr1.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window_fsr1.frag
-    COMMENT "Compiling single-pass FSR -> window_fsr1_frag.h"
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_lanczos_frag.h
-    COMMAND glslangValidator -V --vn window_lanczos_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_lanczos_frag.h
-            ${VULKAN_RENDERER_DIR}/window_lanczos.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window_lanczos.frag
-    COMMENT "Compiling Lanczos 2 -> window_lanczos_frag.h"
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_stretch_frag.h
-    COMMAND glslangValidator -V --vn window_stretch_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_stretch_frag.h
-            ${VULKAN_RENDERER_DIR}/window_stretch.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window_stretch.frag
-    COMMENT "Compiling window_stretch.frag -> window_stretch_frag.h"
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_postfx_frag.h
-    COMMAND glslangValidator -V --vn window_postfx_frag_code
-            -x -o ${CMAKE_CURRENT_BINARY_DIR}/window_postfx_frag.h
-            ${VULKAN_RENDERER_DIR}/window_postfx.frag
-    DEPENDS ${VULKAN_RENDERER_DIR}/window_postfx.frag
-    COMMENT "Compiling window_postfx.frag -> window_postfx_frag.h"
-)
+add_subdirectory(wfg)
 
 set(VULKAN_CONTEXT_SOURCE ${VULKAN_RENDERER_DIR}/VulkanRendererContext.cpp)
 set(VULKAN_CONTEXT_LEGACY ${CMAKE_CURRENT_BINARY_DIR}/VulkanRendererContext_legacy.cpp)
@@ -220,6 +214,7 @@ add_library(vulkan_renderer SHARED
         ${VULKAN_CONTEXT_LEGACY}
         winlator/renderer/vulkan/VulkanRendererFilters.cpp
         winlator/renderer/vulkan/VulkanRendererPipelineOpt.cpp
+        winlator/renderer/vulkan/VulkanRendererWfg.cpp
 
         winlator/renderer/vulkan/view_transformation.cpp
         winlator/renderer/vulkan/xform.cpp
@@ -250,4 +245,5 @@ target_link_libraries(vulkan_renderer
         adrenotools
         dl
         atomic
+        wfg
 )

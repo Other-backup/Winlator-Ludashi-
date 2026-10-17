@@ -68,6 +68,9 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     private int     pendingPostFXMode     = 0;
     private float   pendingSharpness      = 0.5f;
     private boolean pendingSwapRB         = false;
+    private boolean pendingWfgEnabled     = false;
+    private int     pendingWfgFlowSide    = 180;
+    private int     pendingWfgTargetFps   = 0;
 
     private WinlatorHUD hudRef = null;
     private FrameRating classicHudRef = null;
@@ -131,6 +134,9 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     @FastNative private native void nativeSetSharpness(long handle, float sharpness);
 
     private native void nativeDumpRendererInfo(long handle);
+    private native void nativeSetWfg(long handle, boolean enabled, int flowSide, int targetFps,
+                                     float refreshHz);
+    private native long nativeGetWfgGeneratedFrames(long handle);
     private native void nativeSetFilterMode(long handle, int mode);
     private native void nativeSetStretchMode(long handle, int mode);
     private native void nativeSetPostFXMode(long handle, int mode);
@@ -195,6 +201,7 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
                         nativeSetStretchMode(nativeHandle, pendingStretchMode);
                         nativeSetPostFXMode(nativeHandle, pendingPostFXMode);
                         nativeSetSharpness(nativeHandle, pendingSharpness);
+                        applyWfg();
                         updateTransform();
                         nativeSetCursorVisible(nativeHandle, cursorVisible);
                         initComplete = true;
@@ -213,6 +220,7 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
                     nativeSetSwapRB(nativeHandle, pendingSwapRB);
                     nativeSetPostFXMode(nativeHandle, pendingPostFXMode);
                     nativeSetSharpness(nativeHandle, pendingSharpness);
+                    applyWfg();
                     updateTransform();
                     nativeSetCursorVisible(nativeHandle, cursorVisible);
 
@@ -645,6 +653,32 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     public void setFilterMode(int mode) {
         pendingFilterMode = mode;
         synchronized (lock) { if (nativeHandle != 0) nativeSetFilterMode(nativeHandle, mode); }
+    }
+
+    /**
+     * WFG (WinNative/Winlator Frame Generator) frame interpolation.
+     * @param flowSide  pixels on the shorter side of the frame the motion is analysed at
+     * @param targetFps output rate to reach; 0 follows the display refresh rate
+     */
+    public void setWfg(boolean enabled, int flowSide, int targetFps) {
+        pendingWfgEnabled = enabled;
+        pendingWfgFlowSide = flowSide;
+        pendingWfgTargetFps = targetFps;
+        synchronized (lock) { applyWfg(); }
+    }
+
+    public boolean isWfgEnabled() { return pendingWfgEnabled; }
+
+    public long getWfgGeneratedFrames() {
+        synchronized (lock) { return nativeHandle != 0 ? nativeGetWfgGeneratedFrames(nativeHandle) : 0; }
+    }
+
+    private void applyWfg() {
+        if (nativeHandle == 0) return;
+        float refreshHz = 60f;
+        android.view.Display display = getDisplay();
+        if (display != null && display.getRefreshRate() > 1f) refreshHz = display.getRefreshRate();
+        nativeSetWfg(nativeHandle, pendingWfgEnabled, pendingWfgFlowSide, pendingWfgTargetFps, refreshHz);
     }
 
     public void setSwapRB(boolean enabled) {
