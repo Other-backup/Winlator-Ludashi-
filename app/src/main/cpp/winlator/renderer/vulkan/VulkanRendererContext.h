@@ -205,6 +205,7 @@ public:
     void setWfgEnabled(bool enabled);
     void setWfgConfig(int flowSide, int targetFps, float refreshHz);
     uint64_t getWfgGeneratedFrames() const { return wfgMadeFrames.load(std::memory_order_relaxed); }
+    uint64_t getPresentedFrames() const { return presentedFrames.load(std::memory_order_relaxed); }
 
     void setCustomScissor(int x, int y, int w, int h);
     void clearCustomScissor();
@@ -402,8 +403,14 @@ public:
     std::atomic<uint32_t> wfgFlowSide{180};
     std::atomic<uint32_t> wfgTargetFps{0};
     std::atomic<uint32_t> wfgRefreshMhz{0};
-    std::atomic<uint64_t> contentFrames{0};       // window content updates: the game's frames
+    std::atomic<uint64_t> contentFrames{0};       // the game window's content updates
     std::atomic<uint64_t> wfgMadeFrames{0};
+    std::atomic<uint64_t> presentedFrames{0};     // real and generated frames shown
+    // The game window: the largest window whose content changed lately. Updates of other
+    // windows (launchers, tooltips, the desktop) are not game frames for WFG's pacing.
+    struct ContentRate { int64_t area = 0; uint64_t lastNs = 0; };
+    std::unordered_map<int64_t, ContentRate> contentRates;   // under renderMutex
+    void noteContentUpdate(int64_t id, int w, int h);
     VkrDis*          wfg              = nullptr;
     bool             wfgUnavailable   = false;
     bool             wfgSwapchain     = false;    // the swapchain was built for generation

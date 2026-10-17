@@ -398,10 +398,13 @@ Java_com_winlator_cmod_widget_VulkanXServerView_nativeSetWfg(
     r->setWfgEnabled(enabled == JNI_TRUE);
 }
 
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_winlator_cmod_widget_VulkanXServerView_nativeGetWfgGeneratedFrames(
-    JNIEnv*, jobject, jlong handle)
+// {presented frames (real and generated), WFG-generated frames}
+extern "C" JNIEXPORT void JNICALL
+Java_com_winlator_cmod_widget_VulkanXServerView_nativeGetFrameCounts(
+    JNIEnv* env, jobject, jlong handle, jlongArray out)
 {
     auto* r = reinterpret_cast<VulkanRendererContext*>(handle);
-    return r ? (jlong)r->getWfgGeneratedFrames() : 0;
+    if (!r || !out || env->GetArrayLength(out) < 2) return;
+    jlong vals[2] = { (jlong)r->getPresentedFrames(), (jlong)r->getWfgGeneratedFrames() };
+    env->SetLongArrayRegion(out, 0, 2, vals);
 }

@@ -1426,12 +1426,14 @@ void VulkanRendererContext::renderFrame() {
         gpi.waitSemaphoreCount=1; gpi.pWaitSemaphores=&sSem[1+g];
         gpi.swapchainCount=1; gpi.pSwapchains=scs; gpi.pImageIndices=&wf.genIdx[g];
         VkResult gr=vk_.QueuePresentKHR(graphicsQueue,&gpi);
+        if (gr==VK_SUCCESS||gr==VK_SUBOPTIMAL_KHR) presentedFrames.fetch_add(1,std::memory_order_relaxed);
         if (gr==VK_ERROR_OUT_OF_DATE_KHR||gr==VK_ERROR_SURFACE_LOST_KHR) fbResized.store(true);
     }
     VkPresentInfoKHR pi{}; pi.sType=VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount=1; pi.pWaitSemaphores=sSem; pi.swapchainCount=1; pi.pSwapchains=scs; pi.pImageIndices=&imgIdx;
 
     res = vk_.QueuePresentKHR(graphicsQueue, &pi);
+    if (res==VK_SUCCESS||res==VK_SUBOPTIMAL_KHR) presentedFrames.fetch_add(1,std::memory_order_relaxed);
 
     if (res==VK_ERROR_OUT_OF_DATE_KHR||res==VK_ERROR_SURFACE_LOST_KHR||res==VK_SUBOPTIMAL_KHR) fbResized.store(true);
     currentFrame=(currentFrame+1)%MAX_FRAMES_IN_FLIGHT;
@@ -1542,8 +1544,8 @@ void VulkanRendererContext::updateWindowContent(int64_t id, void* px, short w, s
         std::lock_guard<std::mutex> lk(renderMutex);
         auto it=texMap.find(id);
         if (it!=texMap.end()) it->second.dirty=true;
+        noteContentUpdate(id,w,h);
     }
-    contentFrames.fetch_add(1,std::memory_order_relaxed);
     needsRender.store(true); dirtyCV.notify_one();
 }
 
@@ -1570,7 +1572,7 @@ void VulkanRendererContext::updateWindowContentAHB(int64_t id, AHardwareBuffer* 
     wt.img  = src.img; wt.mem  = src.mem; wt.view = src.view; wt.ds   = src.ds;
     wt.isAHB = true; wt.ahb  = ahb; wt.w = src.w; wt.h = src.h;
     wt.needsTransition = false; // The first-use layout belongs to the cached VkImage.
-    contentFrames.fetch_add(1,std::memory_order_relaxed);
+    noteContentUpdate(id,src.w,src.h);
     needsRender.store(true); dirtyCV.notify_one();
 }
 

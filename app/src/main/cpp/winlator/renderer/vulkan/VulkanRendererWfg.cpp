@@ -9,6 +9,7 @@
 #include "VulkanRendererContext.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 
@@ -36,6 +37,26 @@ void VulkanRendererContext::setWfgConfig(int flowSide, int targetFps, float refr
     const uint32_t mhz = refreshHz > 0.f ? (uint32_t)std::lround(refreshHz * 1000.f) : 0u;
     if (wfgRefreshMhz.exchange(mhz) != mhz)
         WLOG_I("WFG display refresh %.1f Hz, flow side %d, target %d fps", refreshHz, flowSide, targetFps);
+}
+
+// Under renderMutex, for every window content update. Counts it as a game frame only when the
+// window is the largest of those that changed within the last quarter second.
+void VulkanRendererContext::noteContentUpdate(int64_t id, int w, int h) {
+    constexpr uint64_t kRecentNs = 250000000ull, kForgetNs = 2000000000ull;
+    const uint64_t now = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    ContentRate& self = contentRates[id];
+    self.area = (int64_t)std::max(w, 0) * std::max(h, 0);
+    self.lastNs = now;
+
+    bool largest = true;
+    for (auto it = contentRates.begin(); it != contentRates.end();) {
+        if (now - it->second.lastNs > kForgetNs) { it = contentRates.erase(it); continue; }
+        if (it->first != id && now - it->second.lastNs <= kRecentNs && it->second.area > self.area)
+            largest = false;
+        ++it;
+    }
+    if (largest) contentFrames.fetch_add(1, std::memory_order_relaxed);
 }
 
 void VulkanRendererContext::wfgCreateSems() {

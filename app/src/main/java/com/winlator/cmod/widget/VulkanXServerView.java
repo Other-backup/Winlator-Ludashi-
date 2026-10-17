@@ -37,7 +37,8 @@ import dalvik.annotation.optimization.FastNative;
 
 @SuppressLint("ViewConstructor")
 public class VulkanXServerView extends XServerRendererView implements SurfaceHolder.Callback,
-        WindowManager.OnWindowModificationListener, Pointer.OnPointerMotionListener {
+        WindowManager.OnWindowModificationListener, Pointer.OnPointerMotionListener,
+        OutputFrameSource {
 
     private long nativeHandle = 0;
     private final Object lock = new Object();
@@ -138,7 +139,7 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     private native void nativeDumpRendererInfo(long handle);
     private native void nativeSetWfg(long handle, boolean enabled, int flowSide, int targetFps,
                                      float refreshHz);
-    private native long nativeGetWfgGeneratedFrames(long handle);
+    private native void nativeGetFrameCounts(long handle, long[] out);
     private native void nativeSetFilterMode(long handle, int mode);
     private native void nativeSetStretchMode(long handle, int mode);
     private native void nativeSetPostFXMode(long handle, int mode);
@@ -747,9 +748,21 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
 
     public boolean isWfgEnabled() { return pendingWfgEnabled; }
 
-    public long getWfgGeneratedFrames() {
-        synchronized (lock) { return nativeHandle != 0 ? nativeGetWfgGeneratedFrames(nativeHandle) : 0; }
+    private final long[] frameCounts = new long[2];
+
+    private long frameCount(int which) {
+        synchronized (lock) {
+            if (nativeHandle == 0) return 0;
+            nativeGetFrameCounts(nativeHandle, frameCounts);
+            return frameCounts[which];
+        }
     }
+
+    @Override
+    public long getPresentedFrameCount() { return frameCount(0); }
+
+    @Override
+    public long getGeneratedFrameCount() { return frameCount(1); }
 
     private void applyWfg() {
         if (nativeHandle == 0) return;
@@ -801,8 +814,13 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
 
     public void setFpsWindowId(int id) { fpsWindowId = id; }
     public void setFrameRating(Object fr) {
-        if (fr instanceof WinlatorHUD) hudRef = (WinlatorHUD) fr;
-        else if (fr instanceof FrameRating) classicHudRef = (FrameRating) fr;
+        if (fr instanceof WinlatorHUD) {
+            hudRef = (WinlatorHUD) fr;
+            hudRef.setOutputFrameSource(this);
+        } else if (fr instanceof FrameRating) {
+            classicHudRef = (FrameRating) fr;
+            classicHudRef.setOutputFrameSource(this);
+        }
     }
     public int getFpsLimit() {
         return fpsLimit;
