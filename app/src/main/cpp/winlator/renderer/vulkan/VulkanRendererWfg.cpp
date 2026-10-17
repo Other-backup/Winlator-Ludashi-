@@ -33,7 +33,9 @@ void VulkanRendererContext::setWfgEnabled(bool enabled) {
 void VulkanRendererContext::setWfgConfig(int flowSide, int targetFps, float refreshHz) {
     wfgFlowSide.store((uint32_t)std::clamp(flowSide, 64, 1080));
     wfgTargetFps.store((uint32_t)std::max(0, targetFps));
-    wfgRefreshMhz.store(refreshHz > 0.f ? (uint32_t)std::lround(refreshHz * 1000.f) : 0u);
+    const uint32_t mhz = refreshHz > 0.f ? (uint32_t)std::lround(refreshHz * 1000.f) : 0u;
+    if (wfgRefreshMhz.exchange(mhz) != mhz)
+        WLOG_I("WFG display refresh %.1f Hz, flow side %d, target %d fps", refreshHz, flowSide, targetFps);
 }
 
 void VulkanRendererContext::wfgCreateSems() {

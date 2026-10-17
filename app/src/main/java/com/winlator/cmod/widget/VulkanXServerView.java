@@ -71,6 +71,8 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     private boolean pendingWfgEnabled     = false;
     private int     pendingWfgFlowSide    = 180;
     private int     pendingWfgTargetFps   = 0;
+    private int     savedDisplayModeId    = -1;   // the window's mode before WFG raised it
+    private android.hardware.display.DisplayManager.DisplayListener displayListener;
 
     private WinlatorHUD hudRef = null;
     private FrameRating classicHudRef = null;
@@ -163,6 +165,34 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
         onSurfaceCreated(holder.getSurface());
+        if (pendingWfgEnabled) requestWfgRefreshRate(true);
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager)
+                getContext().getSystemService(Context.DISPLAY_SERVICE);
+        if (dm != null && displayListener == null) {
+            // WFG paces its generated frames to the panel's rate, which changes with the mode.
+            displayListener = new android.hardware.display.DisplayManager.DisplayListener() {
+                @Override public void onDisplayAdded(int displayId) {}
+                @Override public void onDisplayRemoved(int displayId) {}
+                @Override public void onDisplayChanged(int displayId) {
+                    synchronized (lock) { applyWfg(); }
+                }
+            };
+            dm.registerDisplayListener(displayListener, getHandler());
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager)
+                getContext().getSystemService(Context.DISPLAY_SERVICE);
+        if (dm != null && displayListener != null) dm.unregisterDisplayListener(displayListener);
+        displayListener = null;
+        super.onDetachedFromWindow();
     }
 
     @Override
@@ -664,7 +694,55 @@ public class VulkanXServerView extends XServerRendererView implements SurfaceHol
         pendingWfgEnabled = enabled;
         pendingWfgFlowSide = flowSide;
         pendingWfgTargetFps = targetFps;
+        requestWfgRefreshRate(enabled);
         synchronized (lock) { applyWfg(); }
+    }
+
+    /**
+     * Generated frames need display refresh slots above the game's rate: with WFG on, ask for the
+     * panel's fastest mode (the window otherwise stays at the system's default, often 60 Hz).
+     */
+    private void requestWfgRefreshRate(boolean on) {
+        post(() -> {
+            if (!(getContext() instanceof android.app.Activity)) return;
+            android.view.Window window = ((android.app.Activity) getContext()).getWindow();
+            android.view.Display display = getDisplay();
+            if (window == null || display == null) return;
+            android.view.WindowManager.LayoutParams lp = window.getAttributes();
+            Surface surface = getHolder().getSurface();
+            if (on) {
+                android.view.Display.Mode current = display.getMode();
+                android.view.Display.Mode best = current;
+                for (android.view.Display.Mode m : display.getSupportedModes()) {
+                    if (m.getPhysicalWidth() == current.getPhysicalWidth()
+                            && m.getPhysicalHeight() == current.getPhysicalHeight()
+                            && m.getRefreshRate() > best.getRefreshRate()) best = m;
+                }
+                if (savedDisplayModeId < 0) savedDisplayModeId = lp.preferredDisplayModeId;
+                lp.preferredDisplayModeId = best.getModeId();
+                window.setAttributes(lp);
+                setSurfaceFrameRate(surface, best.getRefreshRate());
+            } else if (savedDisplayModeId >= 0) {
+                lp.preferredDisplayModeId = savedDisplayModeId;
+                savedDisplayModeId = -1;
+                window.setAttributes(lp);
+                setSurfaceFrameRate(surface, 0f);
+            }
+        });
+    }
+
+    private static void setSurfaceFrameRate(Surface surface, float hz) {
+        if (surface == null || !surface.isValid()) return;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                surface.setFrameRate(hz, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                        Surface.CHANGE_FRAME_RATE_ALWAYS);
+            } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+                surface.setFrameRate(hz, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            }
+        } catch (RuntimeException ignored) {
+            // A surface released between the check and the call.
+        }
     }
 
     public boolean isWfgEnabled() { return pendingWfgEnabled; }
