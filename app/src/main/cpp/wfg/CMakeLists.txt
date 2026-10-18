@@ -1,4 +1,4 @@
-# WFG (WinNative/Winlator Frame Generator, GPL-3.0): Dense Inverse Search (DIS) optical flow and
+# WFG (WinNative/Winlator Frame Generator, MIT): Dense Inverse Search (DIS) optical flow and
 # the frame interpolator built on it, as one static library linked into vulkan_renderer.
 #
 # Layout:

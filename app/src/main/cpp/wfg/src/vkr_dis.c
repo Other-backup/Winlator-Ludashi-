@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 qwertypower (DEVAR Entertainment LLC)
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 // WFG frame generation: a Vulkan compute realisation of Dense Inverse Search
 // optical flow. The algorithm and its reference implementation come from
 // OpenCV's DISOpticalFlow, which adopted Till Kroeger's original OF_DIS.
-// See CREDITS.md for the full attribution.
+// See LICENSE in the wfg directory for the full attribution.
 
 // vk_dispatch.h first: it declares Vulkan without prototypes, every call goes through vkd.
 #include "vk_dispatch.h"

@@ -1,4 +1,7 @@
-// WFG (WinNative/Winlator Frame Generator, GPL-3.0) in the Vulkan renderer.
+// SPDX-FileCopyrightText: Copyright 2026 qwertypower (DEVAR Entertainment LLC)
+// SPDX-License-Identifier: MIT
+//
+// WFG (WinNative/Winlator Frame Generator, MIT) in the Vulkan renderer.
 //
 // With WFG on, the scene is drawn into a composite image instead of the swapchain image. Each
 // new game frame (a window content update) goes to WFG, which interpolates frames between the
