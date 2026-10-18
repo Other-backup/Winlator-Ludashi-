@@ -1693,8 +1693,8 @@ public class XServerDisplayActivity extends AppCompatActivity {
         if (swWfg == null || spQuality == null || spTarget == null) return;
 
         // Motion is analysed at this many pixels on the shorter side of the frame.
-        final int[]    flowSides     = {128, 180, 252};
-        final String[] qualityLabels = {"Fast", "Balanced", "Quality"};
+        final int[]    flowSides     = {180, 252};
+        final String[] qualityLabels = {"Fast", "Balanced"};
         final int[]    targets       = {0, 60, 90, 120, 144};
         final String[] targetLabels  = {"Max refresh", "60 FPS", "90 FPS", "120 FPS", "144 FPS"};
 
@@ -1717,9 +1717,9 @@ public class XServerDisplayActivity extends AppCompatActivity {
             return;
         }
 
-        int quality = parseExtra("wfgQuality", 1);
+        int quality = parseExtra("wfgQuality", 0);
         int target  = parseExtra("wfgTarget", 0);
-        if (quality < 0 || quality >= flowSides.length) quality = 1;
+        if (quality < 0 || quality >= flowSides.length) quality = 0;
         if (target < 0 || target >= targets.length) target = 0;
         boolean enabled = parseExtra("wfgEnabled", 0) == 1;
 
