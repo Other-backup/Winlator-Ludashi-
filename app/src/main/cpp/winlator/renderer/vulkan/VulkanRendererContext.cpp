@@ -1172,6 +1172,13 @@ void VulkanRendererContext::renderLoop() {
             dirtyCV.wait_for(lk,std::chrono::milliseconds(50),[this]{
                 return !isRunning||surfaceDetached.load(); });
         }
+        if (wfgDeferredRender.exchange(false)) {
+            // A render WFG skipped: show it with the next game frame, or on its own if none comes.
+            std::unique_lock<std::mutex> lk(dirtyMutex);
+            dirtyCV.wait_for(lk,std::chrono::milliseconds(100),[this]{
+                return !isRunning||needsRender.load()||fbResized.load(); });
+            needsRender.store(true);
+        }
     }
 }
 
@@ -1241,6 +1248,7 @@ void VulkanRendererContext::renderFrame() {
         fbResized.store(true);
         return;
     }
+    if (wfgSkipRender()) return;
     if (currentFrame >= cmdBufs.size() || cmdBufs[currentFrame] == VK_NULL_HANDLE) {
         fbResized.store(true);
         swapchainRetryPending.store(true);
@@ -1268,7 +1276,10 @@ void VulkanRendererContext::renderFrame() {
     }
 
     uint32_t imgIdx;
+    const auto acquireStart=std::chrono::steady_clock::now();
     VkResult res=vk_.AcquireNextImageKHR(device,swapchain,UINT64_MAX,imgAvailSems[currentFrame],VK_NULL_HANDLE,&imgIdx);
+    const uint64_t acquireWaitNs=(uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now()-acquireStart).count();
     if (res==VK_ERROR_OUT_OF_DATE_KHR||res==VK_ERROR_SURFACE_LOST_KHR){fbResized.store(true);return;}
     if (res!=VK_SUCCESS&&res!=VK_SUBOPTIMAL_KHR) return;
     if (imgIdx >= swapchainFBs.size() || imgIdx >= swapchainImages.size()) {
@@ -1434,6 +1445,7 @@ void VulkanRendererContext::renderFrame() {
 
     res = vk_.QueuePresentKHR(graphicsQueue, &pi);
     if (res==VK_SUCCESS||res==VK_SUBOPTIMAL_KHR) presentedFrames.fetch_add(1,std::memory_order_relaxed);
+    if (wf.active) wfgNotePresented(1+wf.genCount,acquireWaitNs);
 
     if (res==VK_ERROR_OUT_OF_DATE_KHR||res==VK_ERROR_SURFACE_LOST_KHR||res==VK_SUBOPTIMAL_KHR) fbResized.store(true);
     currentFrame=(currentFrame+1)%MAX_FRAMES_IN_FLIGHT;

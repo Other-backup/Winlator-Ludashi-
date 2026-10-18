@@ -411,6 +411,19 @@ public:
     struct ContentRate { int64_t area = 0; uint64_t lastNs = 0; };
     std::unordered_map<int64_t, ContentRate> contentRates;   // under renderMutex
     void noteContentUpdate(int64_t id, int w, int h);
+    std::atomic<uint64_t> lastGameFrameNs{0};
+    // While the game drives the frames, a render without a new game frame is not presented:
+    // its extra image would only grow the FIFO queue in front of the display (latency).
+    std::atomic<bool>     wfgDeferredRender{false};
+    uint64_t              wfgSkippedRenders = 0;
+    // Model of the FIFO queue: when the last presented image reaches the display. Generated
+    // frames are dropped while more than one image would wait ahead of this pair's own.
+    uint64_t              wfgQueueEndNs = 0;
+    uint64_t              wfgTrimmedFrames = 0;
+    uint64_t              wfgAheadSum = 0;
+    bool     wfgSkipRender();
+    uint64_t wfgPeriodNs() const;
+    void     wfgNotePresented(uint32_t count, uint64_t acquireWaitNs);
     VkrDis*          wfg              = nullptr;
     bool             wfgUnavailable   = false;
     bool             wfgSwapchain     = false;    // the swapchain was built for generation

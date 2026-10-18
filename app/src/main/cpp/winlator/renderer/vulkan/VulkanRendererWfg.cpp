@@ -20,6 +20,43 @@ namespace {
 // so a full present queue drops generated frames instead of stalling the game's.
 constexpr uint64_t kWfgAcquireTimeoutNs    = 3000000ull;
 constexpr uint64_t kWfgAcquireTimeoutMaxNs = 12000000ull;
+// The game counts as driving the frames while its window changed this recently.
+constexpr uint64_t kGameActiveNs           = 100000000ull;
+
+uint64_t nowNs() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
+
+uint64_t VulkanRendererContext::wfgPeriodNs() const {
+    const uint32_t mhz = wfgRefreshMhz.load();
+    return mhz > 1000 ? (uint64_t)(1.0e12 / (double)mhz) : 16666667ull;
+}
+
+// Before the swapchain image is acquired: a render that carries no new game frame is skipped
+// while the game is drawing (what changed shows with its next frame); renderLoop re-renders
+// after kGameActiveNs if no game frame comes.
+bool VulkanRendererContext::wfgSkipRender() {
+    if (!wfg || wfgUnavailable || !wfgSwapchain || !swapchainTransferDst || fbResized.load())
+        return false;
+    if (contentFrames.load() != wfgSeenFrames) return false;
+    const uint64_t last = lastGameFrameNs.load();
+    if (!last || nowNs() - last >= kGameActiveNs) return false;
+    wfgSkippedRenders++;
+    wfgDeferredRender.store(true);
+    return true;
+}
+
+// After the presents of a WFG frame: advances the queue model by the images presented, one
+// refresh each. A real acquire that blocked means at least one more image than modelled waits.
+void VulkanRendererContext::wfgNotePresented(uint32_t count, uint64_t acquireWaitNs) {
+    const uint64_t period = wfgPeriodNs();
+    const uint64_t now = nowNs();
+    if (acquireWaitNs > period / 2 && wfgQueueEndNs < now + 2 * period)
+        wfgQueueEndNs = now + 2 * period;
+    for (uint32_t i = 0; i < count; i++)
+        wfgQueueEndNs = std::max(now + period, wfgQueueEndNs + period);
 }
 
 void VulkanRendererContext::setWfgEnabled(bool enabled) {
@@ -43,8 +80,7 @@ void VulkanRendererContext::setWfgConfig(int flowSide, int targetFps, float refr
 // window is the largest of those that changed within the last quarter second.
 void VulkanRendererContext::noteContentUpdate(int64_t id, int w, int h) {
     constexpr uint64_t kRecentNs = 250000000ull, kForgetNs = 2000000000ull;
-    const uint64_t now = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const uint64_t now = nowNs();
     ContentRate& self = contentRates[id];
     self.area = (int64_t)std::max(w, 0) * std::max(h, 0);
     self.lastNs = now;
@@ -56,7 +92,10 @@ void VulkanRendererContext::noteContentUpdate(int64_t id, int w, int h) {
             largest = false;
         ++it;
     }
-    if (largest) contentFrames.fetch_add(1, std::memory_order_relaxed);
+    if (largest) {
+        contentFrames.fetch_add(1, std::memory_order_relaxed);
+        lastGameFrameNs.store(now, std::memory_order_relaxed);
+    }
 }
 
 void VulkanRendererContext::wfgCreateSems() {
@@ -294,7 +333,20 @@ VulkanRendererContext::WfgFrame VulkanRendererContext::wfgBeginFrame(
     const uint32_t images = (uint32_t)swapchainImages.size();
     uint32_t capacity = images > swapchainMinImages + 1 ? images - swapchainMinImages - 1 : 0;
     capacity = std::min(capacity, VKR_DIS_MAX_GENERATIONS);
-    const uint32_t planned = vkr_dis_plan(wfg, capacity, frames);
+    uint32_t planned = vkr_dis_plan(wfg, capacity, frames);
+
+    // Images still waiting for the display beyond the next refresh. More than two means the
+    // queue has grown (a game slightly faster than the output cadence, a burst after a stall):
+    // drop one generated frame per pair until it drains, since every image presented now
+    // reaches the display that much later. One at a time keeps the motion cadence even.
+    const uint64_t period = wfgPeriodNs();
+    const uint64_t now = nowNs();
+    const uint64_t ahead = wfgQueueEndNs > now + period ? (wfgQueueEndNs - now - period) / period : 0;
+    wfgAheadSum += ahead;
+    if (ahead > 2 && planned > 0) {
+        planned--;
+        wfgTrimmedFrames++;
+    }
 
     uint64_t timeout = kWfgAcquireTimeoutNs;
     if (refresh > 1.f)
@@ -338,10 +390,14 @@ void VulkanRendererContext::wfgRecord(VkCommandBuffer cb, uint32_t imgIdx, WfgFr
                 const uint64_t dReal = wfgRealFrames - wfgLogReal, dMade = made - wfgLogMade;
                 wfgLogReal = wfgRealFrames;
                 wfgLogMade = made;
-                WLOG_I("WFG delivered real=%llu made=%llu ratio=%.2f misses=%llu",
+                WLOG_I("WFG delivered real=%llu made=%llu ratio=%.2f misses=%llu skipped=%llu "
+                       "trimmed=%llu ahead=%.2f",
                        (unsigned long long)wfgRealFrames, (unsigned long long)made,
                        dReal ? (double)dMade / (double)dReal : 0.0,
-                       (unsigned long long)wfgAcquireMisses);
+                       (unsigned long long)wfgAcquireMisses, (unsigned long long)wfgSkippedRenders,
+                       (unsigned long long)wfgTrimmedFrames,
+                       dReal ? (double)wfgAheadSum / (double)dReal : 0.0);
+                wfgAheadSum = 0;
             }
         }
     }
